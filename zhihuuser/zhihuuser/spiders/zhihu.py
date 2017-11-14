@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 from scrapy import Spider, Request
+import json
+from zhihuuser.items import UserItem
 
 
 class ZhihuSpider(Spider):
@@ -14,14 +16,56 @@ class ZhihuSpider(Spider):
     follows_url = 'https://www.zhihu.com/api/v4/members/{user}/followees?include={include}&offset={offset}&limit={limit}'
     follows_query = 'data[*].answer_count,articles_count,gender,follower_count,is_followed,is_following,badge[?(type=best_answerer)].topics'
 
+    followers_url = 'https://www.zhihu.com/api/v4/members/{user}/followers?include={include}&offset={offset}&limit={limit}'
+    followers_query = 'data[*].answer_count,articles_count,gender,follower_count,is_followed,is_following,badge[?(type=best_answerer)].topics'
+
     def start_requests(self):
         yield Request(self.user_url.format(user=self.start_user, include=self.user_query), callback=self.parse_user)
-        yield Request(self.follows_url.format(user=self.start_user, include=self.follows_query, offset=0, limit=20), callback=self.parse_follows)
+        yield Request(
+            self.follows_url.format(user=self.start_user, include=self.follows_query, offset=0, limit=20),
+            callback=self.parse_follows)
+        yield Request(
+            self.followers_url.format(user=self.start_user, include=self.followers_query, offset=0, limit=20),
+            callback=self.parse_follows)
 
     def parse_user(self, response):
-        print('parse_user==================================')
-        print(response.text)
+        result = json.loads(response.text)
+        item = UserItem()
+        # 对结果进行赋值
+        for field in item.fields:
+            if field in result.keys():
+                item[field] = result.get(field)
+        yield item
+
+        yield Request(
+            self.follows_url.format(user=result.get('url_token'), include=self.follows_query, offset=0, limit=20),
+            callback=self.parse_follows)
+        yield Request(
+            self.followers_url.format(user=result.get('url_token'), include=self.followers_query, offset=0, limit=20),
+            callback=self.parse_followers)
 
     def parse_follows(self, response):
-        print('parse_follows    ==================================')
-        print(response.text)
+        # response里包含了data和paging两个信息
+        results = json.loads(response.text)
+        if 'data' in results.keys():
+            for result in results.get('data'):
+                yield Request(
+                    self.user_url.format(user=result.get('url_token'), include=self.user_query),
+                    callback=self.parse_user)
+
+        if 'paging' in results.keys() and not results.get('paging').get('is_end'):
+            next_page = results.get('paging').get('next')
+            yield Request(next_page, callback=self.parse_follows)
+
+    def parse_followers(self, response):
+        # response里包含了data和paging两个信息
+        results = json.loads(response.text)
+        if 'data' in results.keys():
+            for result in results.get('data'):
+                yield Request(
+                    self.user_url.format(user=result.get('url_token'), include=self.user_query),
+                    callback=self.parse_user)
+
+        if 'paging' in results.keys() and not results.get('paging').get('is_end'):
+            next_page = results.get('paging').get('next')
+            yield Request(next_page, callback=self.parse_followers)
